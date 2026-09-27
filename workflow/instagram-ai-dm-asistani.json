@@ -1,0 +1,1200 @@
+{
+  "nodes": [
+    {
+      "id": "feededdf-bb71-4d9c-b869-0a3d1d88d45d",
+      "name": "Instagram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        1024,
+        352
+      ],
+      "parameters": {
+        "path": "instagram-dm",
+        "options": {},
+        "responseMode": "responseNode",
+        "multipleMethods": true
+      },
+      "typeVersion": 2.1
+    },
+    {
+      "id": "b2069343-d56c-4111-9bac-7c72cf8d9330",
+      "name": "Webhook Verification",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [
+        1248,
+        176
+      ],
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        },
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.challenge'] }}"
+      },
+      "typeVersion": 1.5
+    },
+    {
+      "id": "1d9d267e-5a09-4aad-a62b-14c6663eaeec",
+      "name": "Set Context",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1568,
+        352
+      ],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "message-text-field",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.body.entry[0].messaging[0].message.text }}"
+            },
+            {
+              "id": "sender-id-field",
+              "name": "ig_id",
+              "type": "string",
+              "value": "={{ $json.body.entry[0].id }}"
+            },
+            {
+              "id": "285e5c64-c494-4bc2-97af-759696a40308",
+              "name": "is_from_bot",
+              "type": "string",
+              "value": "={{ $json.body.entry[0].messaging[0].message.metadata }}"
+            },
+            {
+              "id": "access-token-field",
+              "name": "ig_access_token",
+              "type": "string",
+              "value": "={{ $vars.IG_ACCESS_TOKEN }}"
+            },
+            {
+              "id": "timestamp-field",
+              "name": "received_timestamp",
+              "type": "number",
+              "value": "={{ $json.body.entry[0].messaging[0].timestamp }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "ollama-gemma",
+      "name": "Gemma 3 (yerel, Ollama)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        3600,
+        960
+      ],
+      "parameters": {
+        "model": "gemma3:4b",
+        "options": {
+          "temperature": 0.3,
+          "keepAlive": "60m"
+        }
+      }
+    },
+    {
+      "id": "e4ffc56f-5c56-4fba-8651-f285abdd686f",
+      "name": "Get 15 newest rows",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        3072,
+        544
+      ],
+      "parameters": {
+        "jsCode": "const inputItems = items;\n\n// Nếu danh sách rỗng, trả về rỗng\nif (inputItems.length === 0) {\n  return [];\n}\n\n// Sắp xếp theo thời gian tạo mới nhất\nconst sortedItems = [...inputItems].sort((a, b) => new Date(b.json.createdAt) - new Date(a.json.createdAt));\n\n// Lấy 15 hàng mới nhất\nconst latestItems = sortedItems.slice(0, 15);\n\n// Sắp xếp lại theo thời gian tăng dần để giữ đúng thứ tự hội thoại\nconst finalSorted = [...latestItems].sort((a, b) => new Date(a.json.createdAt) - new Date(b.json.createdAt));\n\n// Trả về kết quả\nreturn finalSorted;\n"
+      },
+      "typeVersion": 2,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "67a2212b-fb57-4577-8a40-41b5bf83e5fb",
+      "name": "Delay Between Messages",
+      "type": "n8n-nodes-base.wait",
+      "notes": "Delay 100ms giữa các tin nhắn để đảm bảo thứ tự",
+      "position": [
+        4464,
+        736
+      ],
+      "parameters": {
+        "amount": 1
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "899467e7-aa45-4ef1-ac4a-65c2f57d4dc4",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "notes": "Loop tuần tự qua từng tin nhắn",
+      "position": [
+        4256,
+        720
+      ],
+      "parameters": {
+        "options": {}
+      },
+      "typeVersion": 3
+    },
+    {
+      "id": "003ccf45-e60b-45b9-8f0e-123b10d02d7f",
+      "name": "Merge History and Find Min_ID",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        3280,
+        544
+      ],
+      "parameters": {
+        "jsCode": "const inputItems = items;\n\nif (inputItems.length === 0) {\n  return [];\n}\n\n// Sort messages by creation time (ascending)\nconst sortedItems = [...inputItems].sort(\n  (a, b) => new Date(a.json.createdAt) - new Date(b.json.createdAt)\n);\n\n// Format helper for YYYY-MM-DD HH:mm:ss in Vietnam timezone\nfunction formatVNDateTime(date) {\n  return date.toLocaleString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });\n}\n\n// Helper to get date string only (YYYY-MM-DD)\nfunction getVNDate(date) {\n  return new Date(date).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' });\n}\n\nlet sessions = [];\nlet currentSession = [];\nlet lastDate = null;\n\nsortedItems.forEach(item => {\n  const createdAt = new Date(item.json.createdAt);\n  const currentDate = getVNDate(createdAt);\n\n  if (lastDate && currentDate !== lastDate) {\n    // Push previous session\n    sessions.push(currentSession);\n    currentSession = [];\n  }\n\n  currentSession.push(item);\n  lastDate = currentDate;\n});\n\n// Push the final session\nif (currentSession.length > 0) {\n  sessions.push(currentSession);\n}\n\n// Get today's date in Vietnam timezone\nconst todayVN = getVNDate(new Date());\n\n// Split sessions into old and current\nlet oldSessionHistory = '';\nlet nowSessionHistory = '';\n\nsessions.forEach(session => {\n  const sessionDate = getVNDate(session[0].json.createdAt);\n  let sessionBlock = `--- 🕒 Session started at ${formatVNDateTime(new Date(session[0].json.createdAt))} ---\\n`;\n\n  session.forEach(item => {\n    const userText = item.json.user_text;\n    const pageText = item.json.page_text;   // <-- lấy phản hồi từ Page\n    const botRep = item.json.bot_rep;       // <-- phản hồi từ AI nếu có\n    const createdAtFormatted = formatVNDateTime(new Date(item.json.createdAt));\n    const updatedAtFormatted = formatVNDateTime(new Date(item.json.updatedAt));\n\n    if (userText) {\n      sessionBlock += `Human [${createdAtFormatted}]: ${userText}\\n`;\n    }\n    if (pageText) {\n      sessionBlock += `Page [${updatedAtFormatted}]: ${pageText}\\n`;\n    }\n    if (botRep) {\n      sessionBlock += `AI [${updatedAtFormatted}]: ${botRep}\\n`;\n    }\n  });\n\n  sessionBlock = sessionBlock.trim() + '\\n';\n\n  if (sessionDate === todayVN) {\n    nowSessionHistory += sessionBlock;\n  } else {\n    oldSessionHistory += sessionBlock;\n  }\n});\n\n// Calculate min_id (smallest id in the list)\nconst minId = Math.min(...sortedItems.map(item => item.json.id));\n\n// Final output\nreturn [\n  {\n    json: {\n      old_session_history: oldSessionHistory.trim(),\n      now_session_history: nowSessionHistory.trim(),\n      min_id: minId\n    }\n  }\n];\n"
+      },
+      "typeVersion": 2,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "4cd4d408-7e4a-4c5d-9861-a6aeb96c13de",
+      "name": "User is Sender",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        2064,
+        352
+      ],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "16816be3-d7e3-4c45-9277-38be6cb24335",
+              "name": "user_id",
+              "type": "string",
+              "value": "={{ $('Instagram Webhook').item.json.body.entry[0].messaging[0].sender.id }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "f0fada31-adc3-42cc-8fa1-22a488a636c0",
+      "name": "Is from page?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1792,
+        352
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "version": 3,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "22aba732-f39d-473f-9336-6e9f0fdfd9ff",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $('Instagram Webhook').item.json.body.entry[0].messaging[0].sender.id }}",
+              "rightValue": "={{ $('Instagram Webhook').item.json.body.entry[0].id }}"
+            }
+          ]
+        },
+        "looseTypeValidation": true
+      },
+      "typeVersion": 2.3,
+      "alwaysOutputData": false
+    },
+    {
+      "id": "532a45d0-0c3b-4dbd-88d8-038053b0bbbe",
+      "name": "Seen",
+      "type": "n8n-nodes-base.httpRequest",
+      "onError": "continueRegularOutput",
+      "position": [
+        2400,
+        320
+      ],
+      "parameters": {
+        "url": "=https://graph.instagram.com/v24.0/{{ $('Set Context').item.json.ig_id }}/messages",
+        "method": "POST",
+        "options": {},
+        "jsonBody": "={\n  \"recipient\": {\n    \"id\": \"{{ $('User is Sender').item.json.user_id }}\"\n  },\n  \"sender_action\": \"mark_seen\"\n} ",
+        "sendBody": true,
+        "sendQuery": true,
+        "specifyBody": "json",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "={{ $('Set Context').item.json.ig_access_token }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.3
+    },
+    {
+      "id": "ddc0ffa3-27d9-4713-8398-df3402c8508a",
+      "name": "Insert To Unprocessed",
+      "type": "n8n-nodes-base.dataTable",
+      "position": [
+        2400,
+        544
+      ],
+      "parameters": {
+        "columns": {
+          "value": {
+            "page_id": "={{ $('Set Context').item.json.ig_id }}",
+            "user_id": "={{ $('User is Sender').item.json.user_id }}",
+            "processed": false,
+            "user_text": "={{ $('Set Context').item.json.message }}"
+          },
+          "schema": [
+            {
+              "id": "user_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "readOnly": false,
+              "required": false,
+              "displayName": "user_id",
+              "defaultMatch": false
+            },
+            {
+              "id": "user_text",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "readOnly": false,
+              "required": false,
+              "displayName": "user_text",
+              "defaultMatch": false
+            },
+            {
+              "id": "page_id",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "readOnly": false,
+              "required": false,
+              "displayName": "page_id",
+              "defaultMatch": false
+            },
+            {
+              "id": "page_text",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "readOnly": false,
+              "required": false,
+              "displayName": "page_text",
+              "defaultMatch": false
+            },
+            {
+              "id": "processed",
+              "type": "boolean",
+              "display": true,
+              "removed": false,
+              "readOnly": false,
+              "required": false,
+              "displayName": "processed",
+              "defaultMatch": false
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {},
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "instagram_dm_mesajlar"
+        }
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "fafc6774-42f4-4b81-b624-8bce03ab9196",
+      "name": "Get history message",
+      "type": "n8n-nodes-base.dataTable",
+      "position": [
+        2848,
+        544
+      ],
+      "parameters": {
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('User is Sender').item.json.user_id }}"
+            },
+            {
+              "keyName": "processed",
+              "condition": "isTrue"
+            },
+            {
+              "keyName": "page_id",
+              "keyValue": "={{ $json.page_id }}"
+            }
+          ]
+        },
+        "matchType": "allConditions",
+        "operation": "get",
+        "returnAll": true,
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "instagram_dm_mesajlar"
+        }
+      },
+      "typeVersion": 1.1,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "1ededf20-1141-45e3-905d-94dbdc83788e",
+      "name": "Send Typing",
+      "type": "n8n-nodes-base.httpRequest",
+      "onError": "continueRegularOutput",
+      "position": [
+        3616,
+        400
+      ],
+      "parameters": {
+        "url": "=https://graph.instagram.com/v24.0/{{ $('Set Context').item.json.ig_id }}/messages",
+        "method": "POST",
+        "options": {},
+        "jsonBody": "={\n  \"recipient\": {\n    \"id\": \"{{ $('User is Sender').first().json.user_id }}\"\n  },\n  \"sender_action\": \"typing_on\"\n}\n",
+        "sendBody": true,
+        "sendQuery": true,
+        "specifyBody": "json",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "={{ $('Set Context').first().json.ig_access_token }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.3
+    },
+    {
+      "id": "7d350753-3bc9-4257-9cad-163b88a7c033",
+      "name": "Process Merged Message",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        3616,
+        720
+      ],
+      "parameters": {
+        "text": "={{ $('Get MaxID and Merged Mess').first().json.merged_message }}",
+        "options": {
+          "systemMessage": "=## Kimlik\nSen [İŞLETME ADI] adlı işletmenin Instagram asistanısın. [İŞLETME ADI], [ŞEHİR/SEMT]'te [NE İŞ YAPTIĞINIZ — örn. saç kesimi, boya ve bakım hizmeti veren bir kuaför].\n\n## Görevin\n1. Gelen mesajı anla ve kısa, samimi, net Türkçeyle cevap ver (\"siz\" diye hitap et). Mesaj başka dildeyse o dilde cevap ver.\n2. Fiyat, çalışma saati, adres gibi soruları aşağıdaki sabit bilgilerle cevapla.\n3. Randevu almak isteyen ya da ayrıntı soran müşteriyi WhatsApp'a yönlendir: \"Randevu için WhatsApp'tan yazabilirsiniz: [WHATSAPP NUMARANIZ]\".\n\n## Sabit bilgiler (bunların dışında fiyat/söz UYDURMA)\n- Hizmetler ve fiyatlar: [ÖRNEK: Saç kesimi 500 ₺, Fön 250 ₺, Boya 1.500 ₺'den başlar]\n- Çalışma saatleri: [ÖRNEK: Pazartesi hariç her gün 10:00-20:00]\n- Adres: [AÇIK ADRES / Google Haritalar bağlantısı]\n- Sık sorulan: [ÖRNEK: Randevusuz da gelebilirsiniz ama hafta sonu randevu önerilir]\n\n## Kurallar\n- Cevaplar en fazla 3-4 kısa cümle. Madde işareti, markdown ve emoji kullanma. Düzgün, yazım hatasız Türkçe yaz.\n- İlk mesajda kendini tanıt: \"Merhaba, ben [İŞLETME ADI]'nın asistanıyım.\" Sonraki mesajlarda tanıtma.\n- Bilmediğin bir şeyi (özel indirim, tarih sözü) asla söz verme; \"bunu ekibimiz WhatsApp'tan netleştirsin\" de.\n- Kaba, alakasız veya spam mesajlara kısa ve kibar cevap ver, tartışmaya girme.\n- Bir yapay zekâ asistanı olduğun sorulursa dürüstçe \"evet, yapay zekâ asistanıyım; isterseniz ekibe aktarırım\" de.\n\n## Chat History (DO NOT DELETE)\n### Old session chat history: {{ $json.old_session_history }}\n### Now session chat history: {{ $json.now_session_history }}\n"
+        },
+        "promptType": "define"
+      },
+      "retryOnFail": true,
+      "typeVersion": 3.1,
+      "waitBetweenTries": 100
+    },
+    {
+      "id": "bb140074-72ac-49a0-9b48-48d54b0a99e4",
+      "name": "Send Text",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        4672,
+        736
+      ],
+      "parameters": {
+        "url": "=https://graph.instagram.com/v24.0/{{ $('Set Context').first().json.ig_id }}/messages",
+        "method": "POST",
+        "options": {},
+        "jsonBody": "={\n  \"recipient\": {\n    \"id\": \"{{ $('User is Sender').first().json.user_id }}\"\n  },\n  \"messaging_type\": \"RESPONSE\",\n  \"message\": {\n    \"text\": {{JSON.stringify($('Format Output').item.json.text)}},\n    \"metadata\": \"bot_rep\"\n  }\n}",
+        "sendBody": true,
+        "sendQuery": true,
+        "specifyBody": "json",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "={{ $('Set Context').first().json.ig_access_token}}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 4.3
+    },
+    {
+      "id": "64f1ffd0-d83e-443c-a43d-bd966e97da78",
+      "name": "Update Page Rep",
+      "type": "n8n-nodes-base.dataTable",
+      "position": [
+        4528,
+        464
+      ],
+      "parameters": {
+        "columns": {
+          "value": {
+            "page_text": "={{ $('Process Merged Message').item.json.output }}"
+          },
+          "schema": [
+            {
+              "id": "user_id",
+              "type": "string",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "user_id",
+              "defaultMatch": false
+            },
+            {
+              "id": "user_text",
+              "type": "string",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "user_text",
+              "defaultMatch": false
+            },
+            {
+              "id": "page_id",
+              "type": "string",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "page_id",
+              "defaultMatch": false
+            },
+            {
+              "id": "page_text",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "readOnly": false,
+              "required": false,
+              "displayName": "page_text",
+              "defaultMatch": false
+            },
+            {
+              "id": "processed",
+              "type": "boolean",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "processed",
+              "defaultMatch": false
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('User is Sender').first().json.user_id }}"
+            },
+            {
+              "keyValue": "={{ $('Get MaxID and Merged Mess').first().json.id }}"
+            },
+            {
+              "keyName": "page_id",
+              "keyValue": "={{ $('Set Context').first().json.ig_id }}"
+            }
+          ]
+        },
+        "options": {},
+        "matchType": "allConditions",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "instagram_dm_mesajlar"
+        }
+      },
+      "typeVersion": 1.1,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "0aa989ef-ac8f-42ee-8961-ea6c5f844868",
+      "name": "Update FALSE to TRUE",
+      "type": "n8n-nodes-base.dataTable",
+      "position": [
+        4368,
+        464
+      ],
+      "parameters": {
+        "columns": {
+          "value": {
+            "processed": true
+          },
+          "schema": [
+            {
+              "id": "user_id",
+              "type": "string",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "user_id",
+              "defaultMatch": false
+            },
+            {
+              "id": "user_text",
+              "type": "string",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "user_text",
+              "defaultMatch": false
+            },
+            {
+              "id": "page_id",
+              "type": "string",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "page_id",
+              "defaultMatch": false
+            },
+            {
+              "id": "page_text",
+              "type": "string",
+              "display": true,
+              "removed": true,
+              "readOnly": false,
+              "required": false,
+              "displayName": "page_text",
+              "defaultMatch": false
+            },
+            {
+              "id": "processed",
+              "type": "boolean",
+              "display": true,
+              "removed": false,
+              "readOnly": false,
+              "required": false,
+              "displayName": "processed",
+              "defaultMatch": false
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('User is Sender').first().json.user_id }}"
+            },
+            {
+              "keyName": "processed",
+              "condition": "isFalse"
+            },
+            {
+              "keyName": "page_id",
+              "keyValue": "={{ $('Set Context').first().json.ig_id }}"
+            }
+          ]
+        },
+        "options": {},
+        "matchType": "allConditions",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "instagram_dm_mesajlar"
+        }
+      },
+      "typeVersion": 1.1,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "56786305-3ae3-4a0b-9eff-bcab59711ec7",
+      "name": "Clean History",
+      "type": "n8n-nodes-base.dataTable",
+      "position": [
+        4672,
+        464
+      ],
+      "parameters": {
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('User is Sender').first().json.user_id }}"
+            },
+            {
+              "keyName": "processed",
+              "condition": "isTrue"
+            },
+            {
+              "keyName": "page_id",
+              "keyValue": "={{ $('Set Context').first().json.ig_id }}"
+            },
+            {
+              "keyValue": "={{ $('Merge History and Find Min_ID').first().json.min_id }}",
+              "condition": "lt"
+            }
+          ]
+        },
+        "options": {
+          "dryRun": false
+        },
+        "matchType": "allConditions",
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "instagram_dm_mesajlar"
+        }
+      },
+      "typeVersion": 1.1,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "34af050c-7b86-4e29-b2c8-d6007aa6a371",
+      "name": "Get MaxID and Merged Mess",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2624,
+        544
+      ],
+      "parameters": {
+        "jsCode": "// Lấy danh sách input\nconst inputItems = items;\n\n// Nếu danh sách rỗng, trả về rỗng\nif (inputItems.length === 0) {\n  return [];\n}\n\n// Sắp xếp theo id tăng dần\nconst sortedItems = [...inputItems].sort((a, b) => a.json.id - b.json.id);\n\n// Tạo merged_message từ các user_text không null\nconst mergedMessage = sortedItems\n  .map(item => item.json.user_text)\n  .filter(text => text !== null && text !== undefined)\n  .join(' ');\n\n// Tìm item có id lớn nhất\nlet maxItem = sortedItems[sortedItems.length - 1];\n\n// Thêm các trường vào item lớn nhất\nmaxItem.json.merged_message = mergedMessage;\n// Trả về item có id lớn nhất kèm merged_message và history\nreturn [maxItem];\n"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "a4e720f0-4e6f-4865-9834-c480ef010e09",
+      "name": "Is Message?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        1312,
+        368
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "version": 3,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "has-message-check",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.body.entry?.[0]?.messaging?.[0]?.message?.text }}",
+              "rightValue": ""
+            }
+          ]
+        }
+      },
+      "typeVersion": 2.3
+    },
+    {
+      "id": "681198f5-d345-43c6-a5c2-b4c588dee113",
+      "name": "Main Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        368,
+        -48
+      ],
+      "parameters": {
+        "width": 580,
+        "height": 1220,
+        "content": "## Instagram AI DM Asistanı\n\nInstagram'a gelen DM'lere 7/24, işletmenin kendi bilgileriyle cevap veren n8n akışı.\n\nYapay zekâ: Gemma 3 4B, Ollama ile kendi bilgisayarınızda — mesaj başına ücret yok.\n\nAkış: Meta webhook → metin mi / bizden mi kontrolü → Data Table'a yaz → görüldü + yazıyor… → Gemma cevap → parça parça gönder → geçmişi güncelle.\n\nEk dal: gönderiye \"fiyat / bilgi / randevu\" yorumu yazana otomatik özel DM.\n\nUyarlandığı şablonlar: n8n.io/workflows/14026, 6632, 15206.\n\nKurulum: README.md. Düzenlemeniz gereken tek yer: \"Process Merged Message\" düğümündeki [KÖŞELİ PARANTEZLİ] alanlar."
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "444fd240-d108-4d62-8c57-f84cba69c6dc",
+      "name": "Section 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        976,
+        -48
+      ],
+      "parameters": {
+        "color": 7,
+        "width": 1256,
+        "height": 820,
+        "content": "## Section 1: Webhook & Validation\nReceives Instagram DM events via webhook → returns GET verification challenge to Meta → **Is Message?** filters text-only events → **Is from page?** blocks echo messages sent by the page itself → extracts config into **Set Context**."
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "ad1a29a3-0bd1-4c23-ba6b-94b37f36f643",
+      "name": "Section 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2272,
+        -48
+      ],
+      "parameters": {
+        "color": 7,
+        "width": 1144,
+        "height": 820,
+        "content": "## Section 2: Store Message & Load History\nInserts new user message into **Data Table** as `unprocessed` → marks as **Seen** → merges all unprocessed rows into one prompt (simple batching) → retrieves last 15 **processed** rows → formats them into old-session / current-session history blocks for the AI."
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "3f24989a-d18a-468a-8df3-187fbc7e3ad9",
+      "name": "Section 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3472,
+        -48
+      ],
+      "parameters": {
+        "color": 7,
+        "width": 632,
+        "height": 1120,
+        "content": "## Section 3: AI Processing\nSends `typing_on` indicator to the user → **AI Agent (Gemma 3, yerel)** generates a reply using the merged message + full session history → **Format Output** normalizes markdown, strips unsupported syntax, and splits the reply into ≤2000-character chunks."
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "abd97549-b79e-41e8-810f-517804724baf",
+      "name": "Section 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4176,
+        -48
+      ],
+      "parameters": {
+        "color": 7,
+        "width": 668,
+        "height": 1124,
+        "content": "## Section 4: Deliver & Update\nLoops through each message chunk → waits 1 second between sends → delivers via **Instagram Graph API** → marks all unprocessed rows `processed = true` → saves AI reply into `page_text` → deletes old history rows beyond the 15-message window."
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "9890977c-ae36-457e-a375-a6af54a26feb",
+      "name": "Warning Activate",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        976,
+        592
+      ],
+      "parameters": {
+        "color": 3,
+        "width": 440,
+        "height": 148,
+        "content": "## Activate before verifying!\n\nThe webhook verification in Meta App **only works with the production URL**. Activate this workflow in production mode first, then go to Meta App > Instagram > Webhooks to verify."
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "94733b4a-4ba7-4959-83a8-cdcf2c08b168",
+      "name": "Warning Token",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1504,
+        160
+      ],
+      "parameters": {
+        "color": 3,
+        "width": 236,
+        "height": 180,
+        "content": "## Edit this node!\n\nReplace `ig_access_token` with your **long-lived Instagram Access Token** from:\nMeta App > Instagram > API Setup with credentials."
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "8558e2b3-4cc5-42ae-842b-44467d6a599e",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        3968,
+        720
+      ],
+      "parameters": {
+        "jsCode": "const MAX_LEN = 2000;\n\n/* === Get input === */\nlet text = ($input.first().json.output || \"\").trim();\nif (!text) return [];\n\n/* --- Fix escape JSON: đổi \\\\n, \\\\\\n thành \\n thật --- */\ntext = text.replace(/\\\\+/g, '\\\\');   // gộp nhiều \\ thành 1\ntext = text.replace(/\\\\n/g, '\\n');   // đổi thành newline thật\n\n/* ---------- 1) Markdown → Facebook Markdown ---------- */\nfunction mdToFacebook(md){\n  let s = md;\n\n  // code block → giữ nguyên\n  s = s.replace(/```([\\s\\S]*?)```/g, (m,p1)=>`\\`\\`\\n${p1.trim()}\\n\\`\\`\\``);\n\n  // inline code\n  s = s.replace(/`([^`]+)`/g, (m,p1)=>`\\`${p1}\\``);\n\n  // bold (**text**) → *text*\n  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '*$1*');\n\n  // italic (_text_) → giữ nguyên\n\n  // underline & strike → bỏ\n  s = s.replace(/__([^_]+)__/g, '$1');\n  s = s.replace(/~~([^~]+)~~/g, '$1');\n\n  // headers → bold\n  s = s.replace(/^(#{1,6})\\s+(.+)$/gm, (m, hashes, content)=>`*${content.trim()}*`);\n\n  // list markers → bullet list Messenger\n  s = s.replace(/^[\\-\\*\\+]\\s+(.+)$/gm, '* $1');\n\n  // links → giữ text\n  s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, (m,txt,url)=>txt);\n\n  return s.trim();\n}\n\n/* ---------- 2) HTML → Facebook Markdown ---------- */\nfunction htmlToFbMarkdown(input){\n  let s = input;\n\n  s = s.replace(/<br\\s*\\/?>/gi, '\\n');\n\n  // headers → bold\n  s = s.replace(/<h[1-6][^>]*>([\\s\\S]*?)<\\/h[1-6]>/gi, (m, inner)=>`*${inner.trim()}*`);\n\n  // bold / italic\n  s = s.replace(/<\\/?strong[^>]*>/gi, '*');\n  s = s.replace(/<\\/?b[^>]*>/gi, '*');\n  s = s.replace(/<\\/?em[^>]*>/gi, '_');\n  s = s.replace(/<\\/?i[^>]*>/gi, '_');\n\n  // paragraphs/divs → newline\n  s = s.replace(/<\\/?(p|div)[^>]*>/gi, '\\n');\n\n  // lists → bullet\n  s = s.replace(/<li[^>]*>/gi, '* ').replace(/<\\/li>/gi, '\\n');\n  s = s.replace(/<\\/?(ul|ol)[^>]*>/gi, '');\n\n  // remove all other tags\n  s = s.replace(/<\\/?[^>]+>/g, '');\n\n  return s.trim();\n}\n\n/* ---------- 3) Normalize content ---------- */\nfunction normalizeToFacebookMarkdown(input){\n  const looksLikeMd = /(^|\\s)[*_`~]|^#{1,6}\\s|```/.test(input);\n  let s = looksLikeMd ? mdToFacebook(input) : htmlToFbMarkdown(input);\n\n  // collapse nhiều newline thành 1\n  s = s.replace(/\\n{3,}/g, '\\n\\n');\n\n  // xoá ký tự \"\\\" thừa còn sót\n  s = s.replace(/\\\\+/g, '');\n\n  return s.trim();\n}\n\n/* ---------- 4) Split by newlines (smart split) ---------- */\nfunction splitMarkdownSmart(text, maxLen) {\n  const lines = text.split('\\n');\n  const chunks = [];\n  let buffer = '';\n\n  for (const line of lines) {\n    if ((buffer + line + '\\n').length > maxLen) {\n      if (buffer.trim()) chunks.push(buffer.trim());\n      buffer = line + '\\n';\n    } else {\n      buffer += line + '\\n';\n    }\n  }\n\n  if (buffer.trim()) chunks.push(buffer.trim());\n\n  return chunks.map(c => c.replace(/\\n+$/,''));\n}\n\n/* ===== Run ===== */\nconst normalized = normalizeToFacebookMarkdown(text);\nconst chunks = splitMarkdownSmart(normalized, MAX_LEN);\n\nreturn chunks.map(c => ({ json: { text: c } }));\n"
+      },
+      "typeVersion": 2
+    },
+    {
+      "id": "yorum-mu",
+      "name": "Anahtar kelime yorumu mu?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1572,
+        688
+      ],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c-field",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $('Instagram Webhook').item.json.body.entry[0].changes?.[0]?.field }}",
+              "rightValue": "comments"
+            },
+            {
+              "id": "c-text",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              },
+              "leftValue": "={{ ($('Instagram Webhook').item.json.body.entry[0].changes?.[0]?.value?.text || '').toLocaleLowerCase('tr-TR').trim() }}",
+              "rightValue": "^(fiyat|bilgi|randevu|dm)[.! ]*$"
+            },
+            {
+              "id": "c-self",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              },
+              "leftValue": "={{ $('Instagram Webhook').item.json.body.entry[0].changes?.[0]?.value?.from?.id }}",
+              "rightValue": "={{ $('Instagram Webhook').item.json.body.entry[0].id }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "yorum-dm",
+      "name": "Yorum yazana DM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1832,
+        668
+      ],
+      "parameters": {
+        "url": "=https://graph.instagram.com/v23.0/{{ $('Instagram Webhook').item.json.body.entry[0].id }}/messages",
+        "method": "POST",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "={{ $vars.IG_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"recipient\": { \"comment_id\": \"{{ $('Instagram Webhook').item.json.body.entry[0].changes[0].value.id }}\" },\n  \"message\": { \"text\": \"Merhaba, ilginiz için teşekkürler! Ben [İŞLETME ADI]'nın asistanıyım. Size nasıl yardımcı olabilirim? Randevu için WhatsApp: [WHATSAPP NUMARANIZ]\" }\n}",
+        "options": {}
+      }
+    },
+    {
+      "id": "yorum-not",
+      "name": "Yorum notu",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1532,
+        588
+      ],
+      "parameters": {
+        "color": 5,
+        "width": 560,
+        "height": 300,
+        "content": "## Yorum → otomatik DM\nGönderiye \"fiyat\", \"bilgi\", \"randevu\" ya da \"dm\" yorumu yazana özel DM (private reply) gider.\nKaynak: n8n.io/workflows/15206. Meta tek webhook URL verdiği için ayrı akış değil, bu akışın dalı.\nMeta uygulamasında webhook alanı olarak `comments` da seçili olmalı.\nKişi DM'ye cevap verince konuşmayı yapay zekâ asistanı sürdürür."
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Seen": {
+      "main": [
+        []
+      ]
+    },
+    "Send Text": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Message?": {
+      "main": [
+        [
+          {
+            "node": "Set Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Anahtar kelime yorumu mu?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Context": {
+      "main": [
+        [
+          {
+            "node": "Is from page?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Output": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is from page?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "User is Sender",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "User is Sender": {
+      "main": [
+        [
+          {
+            "node": "Insert To Unprocessed",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Seen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Update FALSE to TRUE",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delay Between Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Page Rep": {
+      "main": [
+        [
+          {
+            "node": "Clean History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Instagram Webhook": {
+      "main": [
+        [
+          {
+            "node": "Webhook Verification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Webhook Verification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get 15 newest rows": {
+      "main": [
+        [
+          {
+            "node": "Merge History and Find Min_ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get history message": {
+      "main": [
+        [
+          {
+            "node": "Get 15 newest rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update FALSE to TRUE": {
+      "main": [
+        [
+          {
+            "node": "Update Page Rep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert To Unprocessed": {
+      "main": [
+        [
+          {
+            "node": "Get MaxID and Merged Mess",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delay Between Messages": {
+      "main": [
+        [
+          {
+            "node": "Send Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Merged Message": {
+      "main": [
+        [
+          {
+            "node": "Format Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get MaxID and Merged Mess": {
+      "main": [
+        [
+          {
+            "node": "Get history message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge History and Find Min_ID": {
+      "main": [
+        [
+          {
+            "node": "Send Typing",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Process Merged Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anahtar kelime yorumu mu?": {
+      "main": [
+        [
+          {
+            "node": "Yorum yazana DM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Gemma 3 (yerel, Ollama)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Process Merged Message",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "name": "Instagram AI DM Asistanı (n8n + yerel Gemma)"
+}
