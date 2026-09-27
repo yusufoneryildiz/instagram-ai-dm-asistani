@@ -4,6 +4,8 @@ Küçük işletmeler için Instagram DM'lerine 7/24 cevap veren yapay zekâ asis
 [n8n](https://n8n.io) ile kurulur, yapay zekâ modeli **kendi bilgisayarınızda** çalışır:
 mesaj başına ücret, aylık abonelik yok.
 
+![Örnek konuşma — gerçek Gemma 3 çıktıları](docs/demo.png)
+
 > Kuaför, kafe, güzellik salonu, emlakçı… Müşteri gece 23:00'te "fiyat ne kadar?" yazdığında
 > cevap sabahı beklemesin. Hazır SaaS araçlar bu iş için ayda $15–100 istiyor; bu akış
 > ücretsiz araçlarla aynı işi yapıyor.
@@ -97,6 +99,18 @@ webhook adresi `localhost` görünür.
 Asistanın bildiği her şey tek bir yerde: **Process Merged Message** düğümündeki sistem mesajı.
 Fiyat listesi, çalışma saati, sık sorulan sorular, itirazlara cevaplar oraya yazılır.
 Yorumda tetiklenecek kelimeler `Anahtar kelime yorumu mu?` düğümündeki düzenli ifadededir.
+
+## Durum
+
+- **Yapay zekâ kısmı test edildi:** görseldeki cevaplar, bu repodaki sistem mesajıyla yerel
+  Gemma 3 4B'nin gerçek çıktılarıdır (örnek bir kuaför bilgisiyle; cevap süresi 1-3 sn).
+- **Instagram webhook bağlantısı henüz canlı hesapta uçtan uca test edilmedi.** Akış, n8n.io'da
+  yayınlanmış şablonların Graph API çağrılarını aynen kullanıyor; kurup deneyenlerin geri
+  bildirimine açığım.
+
+Testte öğrenilen: küçük model, randevu takvimini göremediği halde "müsaitiz" diye cevap
+uydurabiliyordu. Sistem mesajının sonuna eklenen "EN ÖNEMLİ KURAL" bölümüyle bu 4/4 denemede
+düzeldi. Kendi kurallarınızı eklerken en kritik olanı en sona yazın.
 
 ## Kaynak ve teşekkür
 
